@@ -1,0 +1,20 @@
+# Environments & Secrets
+.env
+.env.*
+!.env.example
+.venv/
+env/
+venv/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS & Logs
+.DS_Store
+logs/
+*.log
+
+# Database
+*.sqlite3
