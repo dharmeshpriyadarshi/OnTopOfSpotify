@@ -7,6 +7,8 @@ from core.exceptions import (
     api_exception_handler,
     global_exception_handler,
 )
+from api import auth
+
 
 app = FastAPI(
     title="Spotify API Aggregator CMS",
@@ -17,6 +19,9 @@ app = FastAPI(
 # Register application exception handlers.
 app.add_exception_handler(APIException, api_exception_handler)
 app.add_exception_handler(Exception, global_exception_handler)
+
+# Register application routers.
+app.include_router(auth.router)
 
 
 @app.get("/health", tags=["System"])
