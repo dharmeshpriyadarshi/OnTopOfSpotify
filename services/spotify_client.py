@@ -172,3 +172,86 @@ class SpotifyOAuthClient:
                 "Internal failure during authentication.",
                 status_code=500,
             ) from None
+
+
+    async def get_user_profile(self, access_token: str) -> dict:
+        """
+        Fetch the authenticated Spotify user's profile.
+        """
+
+        if not access_token:
+            raise APIException(
+                "Spotify access token is missing.",
+                status_code=401,
+            )
+
+        headers = {
+            "Authorization": f"Bearer {access_token}"
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(
+                    "https://api.spotify.com/v1/me",
+                    headers=headers,
+                )
+
+                if response.status_code != 200:
+                    logger.error(
+                        "Spotify profile request failed. HTTP status: %s",
+                        response.status_code,
+                    )
+                    raise APIException(
+                        "Failed to retrieve Spotify user profile.",
+                        status_code=401 if response.status_code == 401 else 502,
+                    )
+
+                profile_data = response.json()
+
+                if not isinstance(profile_data, dict):
+                    raise APIException(
+                        "Spotify returned an invalid profile response.",
+                        status_code=502,
+                    )
+
+                if not profile_data.get("id"):
+                    raise APIException(
+                        "Spotify profile does not contain a user ID.",
+                        status_code=502,
+                    )
+
+                return profile_data
+
+        except APIException:
+            raise
+
+        except httpx.TimeoutException:
+            logger.warning("Spotify profile request timed out.")
+            raise APIException(
+                "Spotify profile service timed out.",
+                status_code=504,
+            ) from None
+
+        except httpx.HTTPError as exc:
+            logger.error(
+                "Spotify profile network failure: %s",
+                type(exc).__name__,
+            )
+            raise APIException(
+                "Unable to communicate with Spotify profile service.",
+                status_code=502,
+            ) from None
+
+        except ValueError:
+            logger.error("Spotify returned invalid profile JSON.")
+            raise APIException(
+                "Spotify returned an invalid profile response.",
+                status_code=502,
+            ) from None
+
+        except Exception:
+            logger.exception("Unexpected Spotify profile retrieval failure.")
+            raise APIException(
+                "Internal failure during profile retrieval.",
+                status_code=500,
+            ) from None
