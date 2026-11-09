@@ -18,3 +18,5 @@ logs/
 
 # Database
 *.sqlite3
+# Local BLOB Storage
+uploads/
