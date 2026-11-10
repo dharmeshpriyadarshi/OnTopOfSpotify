@@ -1,4 +1,4 @@
-
+import re
 import base64
 import secrets
 import urllib.parse
@@ -173,6 +173,248 @@ class SpotifyOAuthClient:
                 status_code=500,
             ) from None
 
+    
+    async def get_client_credentials_token(self) -> str:
+        """
+        Obtain an application-level Spotify access token
+        using the Client Credentials grant.
+        """
+
+        auth_string = f"{self.client_id}:{self.client_secret}"
+
+        encoded_credentials = base64.b64encode(
+            auth_string.encode("utf-8")
+        ).decode("ascii")
+
+        headers = {
+            "Authorization": f"Basic {encoded_credentials}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+
+        data = {
+            "grant_type": "client_credentials",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(
+                    self.TOKEN_URL,
+                    data=data,
+                    headers=headers,
+                )
+
+                if response.status_code != 200:
+                    logger.error(
+                        "Spotify Client Credentials request failed. "
+                        "HTTP status: %s",
+                        response.status_code,
+                    )
+                    raise APIException(
+                        "Unable to obtain Spotify application token.",
+                        status_code=502,
+                    )
+
+                token_data = response.json()
+
+                if (
+                    not isinstance(token_data, dict)
+                    or not isinstance(token_data.get("access_token"), str)
+                    or not token_data["access_token"]
+                ):
+                    raise APIException(
+                        "Spotify returned an invalid application token.",
+                        status_code=502,
+                    )
+
+                return token_data["access_token"]
+
+        except APIException:
+            raise
+
+        except httpx.TimeoutException:
+            logger.warning(
+                "Spotify Client Credentials request timed out."
+            )
+            raise APIException(
+                "Spotify authentication service timed out.",
+                status_code=504,
+            ) from None
+
+        except httpx.HTTPError as exc:
+            logger.error(
+                "Spotify Client Credentials network failure: %s",
+                type(exc).__name__,
+            )
+            raise APIException(
+                "Unable to communicate with Spotify authentication service.",
+                status_code=502,
+            ) from None
+
+        except ValueError:
+            logger.error(
+                "Spotify returned invalid Client Credentials JSON."
+            )
+            raise APIException(
+                "Spotify returned an invalid authentication response.",
+                status_code=502,
+            ) from None
+
+        except Exception:
+            logger.exception(
+                "Unexpected Client Credentials authentication failure."
+            )
+            raise APIException(
+                "Internal failure during Spotify authentication.",
+                status_code=500,
+            ) from None
+
+    async def fetch_playlist_metadata(
+        self,
+        spotify_uri: str,
+    ) -> dict:
+        """
+        Fetch public playlist metadata using an application token.
+        """
+
+        match = re.fullmatch(
+            r"spotify:playlist:([a-zA-Z0-9]+)",
+            spotify_uri,
+        )
+
+        if not match:
+            raise APIException(
+                "Invalid Spotify playlist URI.",
+                status_code=400,
+            )
+
+        playlist_id = match.group(1)
+
+        access_token = await self.get_client_credentials_token()
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+        }
+
+        params = {
+            "fields": "name,description,external_urls.spotify",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(
+                    f"https://api.spotify.com/v1/playlists/{playlist_id}",
+                    headers=headers,
+                    params=params,
+                )
+
+                if response.status_code == 404:
+                    raise APIException(
+                        "Spotify playlist was not found.",
+                        status_code=404,
+                    )
+
+                if response.status_code == 403:
+                    raise APIException(
+                        "Spotify denied access to this playlist.",
+                        status_code=403,
+                    )
+
+                if response.status_code == 429:
+                    logger.warning(
+                        "Spotify playlist API rate limit reached."
+                    )
+                    raise APIException(
+                        "Spotify is temporarily rate limiting requests.",
+                        status_code=503,
+                    )
+
+                if response.status_code != 200:
+                    logger.error(
+                        "Spotify playlist metadata request failed. "
+                        "HTTP status: %s",
+                        response.status_code,
+                    )
+                    raise APIException(
+                        "Unable to retrieve Spotify playlist metadata.",
+                        status_code=502,
+                    )
+
+                playlist_data = response.json()
+
+                if not isinstance(playlist_data, dict):
+                    raise APIException(
+                        "Spotify returned an invalid playlist response.",
+                        status_code=502,
+                    )
+
+                external_urls = playlist_data.get("external_urls")
+
+                if (
+                    not isinstance(playlist_data.get("name"), str)
+                    or not playlist_data["name"]
+                    or not isinstance(external_urls, dict)
+                    or not isinstance(external_urls.get("spotify"), str)
+                ):
+                    raise APIException(
+                        "Spotify playlist metadata is incomplete.",
+                        status_code=502,
+                    )
+
+                description = playlist_data.get("description")
+
+                if description is not None and not isinstance(
+                    description, str
+                ):
+                    raise APIException(
+                        "Spotify returned invalid playlist metadata.",
+                        status_code=502,
+                    )
+
+                return {
+                    "name": playlist_data["name"],
+                    "description": description,
+                    "external_url": external_urls["spotify"],
+                }
+
+        except APIException:
+            raise
+
+        except httpx.TimeoutException:
+            logger.warning(
+                "Spotify playlist metadata request timed out."
+            )
+            raise APIException(
+                "Spotify playlist service timed out.",
+                status_code=504,
+            ) from None
+
+        except httpx.HTTPError as exc:
+            logger.error(
+                "Spotify playlist metadata network failure: %s",
+                type(exc).__name__,
+            )
+            raise APIException(
+                "Unable to communicate with Spotify playlist service.",
+                status_code=502,
+            ) from None
+
+        except ValueError:
+            logger.error(
+                "Spotify returned invalid playlist JSON."
+            )
+            raise APIException(
+                "Spotify returned an invalid playlist response.",
+                status_code=502,
+            ) from None
+
+        except Exception:
+            logger.exception(
+                "Unexpected Spotify playlist metadata retrieval failure."
+            )
+            raise APIException(
+                "Internal failure during playlist retrieval.",
+                status_code=500,
+            ) from None
 
     async def get_user_profile(self, access_token: str) -> dict:
         """

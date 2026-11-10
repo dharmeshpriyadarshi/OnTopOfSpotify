@@ -86,3 +86,37 @@ class PlaylistResponse(BaseModel):
     )
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AggregatedPlaylistResponse(BaseModel):
+    """
+    Unified payload merging external Spotify metadata
+    with internal CMS multimedia assets.
+    """
+
+    spotify_uri: str = Field(
+        ...,
+        description="The requested Spotify URI"
+    )
+
+    spotify_name: str = Field(
+        ...,
+        description="Playlist name retrieved from Spotify"
+    )
+
+    spotify_description: Optional[str] = Field(
+        default=None,
+        description="Playlist description retrieved from Spotify"
+    )
+
+    spotify_external_url: str = Field(
+        ...,
+        description="Direct link to the Spotify playlist"
+    )
+
+    internal_cms_assets: list[MultimediaAssetResponse] = Field(
+        default_factory=list,
+        description="Multimedia assets stored in the internal CMS"
+    )
+
+    model_config = ConfigDict(from_attributes=True)

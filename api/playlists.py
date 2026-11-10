@@ -7,6 +7,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
+from api.auth import spotify_client
 
 from core.config import settings
 from core.exceptions import APIException
@@ -14,7 +16,10 @@ from core.logger import logger
 from db.database import SessionLocal
 from db.models import User, Playlist, PlaylistAccess, MultimediaAsset
 from api.dependencies import get_current_user
-from api.schemas import MultimediaAssetResponse
+from api.schemas import (
+    MultimediaAssetResponse,
+    AggregatedPlaylistResponse,
+)
 from services.storage import LocalStorageManager, STORAGE_DIR
 
 
@@ -148,6 +153,49 @@ def persist_asset_metadata(
         db.close()
 
 
+def get_playlist_assets(
+    spotify_uri: str
+) -> list[MultimediaAssetResponse]:
+    """Retrieve CMS assets associated with a registered playlist."""
+
+    db: Session = SessionLocal()
+
+    try:
+        playlist = (
+            db.query(Playlist)
+            .filter(Playlist.spotify_uri == spotify_uri)
+            .first()
+        )
+
+        # A valid Spotify playlist may not yet exist in our CMS.
+        if not playlist:
+            return []
+
+        assets = (
+            db.query(MultimediaAsset)
+            .filter(MultimediaAsset.playlist_id == playlist.id)
+            .order_by(MultimediaAsset.created_at.asc())
+            .all()
+        )
+
+        return [
+            MultimediaAssetResponse.model_validate(asset)
+            for asset in assets
+        ]
+
+    except SQLAlchemyError:
+        logger.exception(
+            "Database failure while retrieving playlist CMS assets."
+        )
+        raise APIException(
+            "CMS database is temporarily unavailable.",
+            status_code=503,
+        ) from None
+
+    finally:
+        db.close()
+
+
 def cleanup_uploaded_file(relative_url: str) -> None:
     """Safely remove an uploaded file after a failed database transaction."""
 
@@ -174,6 +222,49 @@ def cleanup_uploaded_file(relative_url: str) -> None:
         logger.exception(
             "Failed to clean up an uploaded file after database failure."
         )
+
+
+@router.get(
+    "/{spotify_uri}",
+    response_model=AggregatedPlaylistResponse,
+    summary="Retrieve Aggregated Playlist"
+)
+async def get_aggregated_playlist(spotify_uri: str):
+    """
+    Combine Spotify playlist metadata with internal CMS assets.
+
+    This endpoint is public and does not require user authentication.
+    """
+
+    # 1. Validate the Spotify URI before making external requests.
+    if not re.fullmatch(
+        r"spotify:playlist:[a-zA-Z0-9]+",
+        spotify_uri
+    ):
+        raise APIException(
+            "Invalid Spotify playlist URI.",
+            status_code=400
+        )
+
+    # 2. Retrieve external Spotify playlist metadata.
+    spotify_data = await spotify_client.fetch_playlist_metadata(
+        spotify_uri
+    )
+
+    # 3. Retrieve internal CMS assets from PostgreSQL.
+    cms_assets = await run_in_threadpool(
+        get_playlist_assets,
+        spotify_uri
+    )
+
+    # 4. Combine both data sources into one response.
+    return AggregatedPlaylistResponse(
+        spotify_uri=spotify_uri,
+        spotify_name=spotify_data["name"],
+        spotify_description=spotify_data["description"],
+        spotify_external_url=spotify_data["external_url"],
+        internal_cms_assets=cms_assets,
+    )
 
 
 @router.post(
